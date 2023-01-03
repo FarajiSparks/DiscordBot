@@ -5,87 +5,116 @@ import youtube_dl
 # Create a client object
 client = discord.Client()
 
-# A queue of audio sources
-queue = asyncio.Queue()
+# A queue of songs to play
+song_queue = []
 
-# The current audio source being played
-current_source = None
-
-# A flag to indicate if the bot is currently playing music
+# A flag to indicate if a song is currently playing
 is_playing = False
 
-# A dictionary of voice clients, keyed by server id
-voice_clients = {}
-client = discord.Client()
+# A flag to indicate if the bot is currently in a voice channel
+is_connected = False
 
+# The voice client object
+voice_client = None
 
-# A function to download audio from a YouTube video
-def download_audio(url):
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "192",
-        }],
-    }
-    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+# The current song object
+current_song = None
 
-# A function to create an audio source from a file
-def create_audio_source(filename):
-    return discord.FFmpegPCMAudio(filename)
+# The volume of the bot (1.0 is default)
+volume = 1.0
 
-# A function to play the next item in the queue
-async def play_next(client, voice_client):
-    global current_source
-    global is_playing
-    if not queue.empty():
-        # Get the next item in the queue
-        source = await queue.get()
-        # Play the audio
-        current_source = source
-        voice_client.play(source)
-        is_playing = True
+# A dictionary of commands and their corresponding functions
+commands = {
+    "!play": play,
+    "!stop": stop,
+    "!skip": skip,
+    "!queue": queue,
+    "!volume": set_volume,
+}
+
+# The play function plays a song or adds it to the queue if a song is already playing
+async def play(message, song_url):
+    global is_playing, song_queue, current_song
+    # If a song is currently playing, add the new song to the queue
+    if is_playing:
+        song_queue.append(song_url)
+        await message.channel.send(f"{song_url} added to the queue")
+    # If no song is currently playing, start playing the new song
     else:
-        # No more items in the queue, disconnect from the voice channel
-        await voice_client.disconnect()
-        is_playing = False
+        # Set the current song and start playing
+        current_song = await YTDLSource.from_url(song_url, loop=client.loop)
+        voice_client.play(current_song, after=song_ended)
+        is_playing = True
+        await message.channel.send(f"Now playing: {song_url}")
 
-# An event that is called when an audio source finishes playing
-@client.event
-async def on_voice_source_finish(voice_client, source):
-    global is_playing
+# The stop function stops the current song and clears the queue
+async def stop(message):
+    global is_playing, song_queue, current_song
+    # Stop the current song and clear the queue
+    current_song.cleanup()
+    song_queue.clear()
     is_playing = False
-    # Play the next item in the queue
-    await play_next(client, voice_client)
+    await message.channel.send("Music stopped.")
 
-# An event that is called when a message is received
+# The skip function skips the current song and starts the next one in the queue
+async def skip(message):
+    global is_playing, song_queue, current_song
+    # Stop the current song and start the next one in the queue
+    current_song.cleanup()
+    try:
+        current_song = song_queue.pop(0)
+        voice_client.play(current_song, after=song_ended)
+        is_playing = True
+        await message.channel.send("Song skipped.")
+    except IndexError:
+        # If the queue is empty, stop playing and reset the flag
+        is_playing = False
+        await message.channel.send("Queue is empty.")
+
+# The queue function shows the current queue of songs
+async def queue(message):
+    global song_queue
+    # If the queue is empty, send a message
+    if not song_queue:
+        await message.channel.send("Queue is empty")
+    
+# A class that represents a YouTube video
+class YTDLSource(discord.PCMVolumeTransformer):
+    def __init__(self, source, *, data, volume=0.5):
+        super().__init__(source, volume)
+        self.data = data
+        self.title = data.get("title")
+        self.url = data.get("url")
+    
+    @classmethod
+    async def from_url(cls, url, *, loop=None, stream=False):
+        loop = loop or asyncio.get_event_loop()
+        # Use youtube-dl to get info about the video
+        data = await loop.run_in_executor(None, lambda: youtube_dl.YoutubeDL().extract_info(url, download=not stream))
+        if "entries" in data:
+            data = data["entries"][0]
+        filename = data["url"] if stream else ytdl.prepare_filename(data)
+        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+
+# A function to be called when the song ends
+def song_ended(error):
+    global is_playing
+    if error:
+        print(f"An error occurred: {error}")
+    is_playing = False
+
+# The on_message event handler
 @client.event
 async def on_message(message):
-    global is_playing
     # Ignore messages from the bot itself
     if message.author == client.user:
         return
+    # Split the message into a command and its arguments
+    args = message.content.split()
+    command = args[0].lower()
+    # Check if the command is in the commands dictionary and call the corresponding function
+    if command in commands:
+        await commands[command](message, *args[1:])
 
-    if message.content.startswith("!play"):
-        # Get the voice channel the user is in
-        voice_channel = message.author.voice.channel
-        if voice_channel:
-            # Get the server id
-            server_id = message.guild.id
-            # Check if the bot is already in a voice channel
-            if server_id in voice_clients:
-                # Get the voice client for this server
-                voice_client = voice_clients[server_id]
-            else:
-                # Join the voice channel
-                voice_client = await voice_channel.connect()
-                # Add the voice client to the dictionary
-                voice_clients[server_id] = voice_client
-            # Get the URL of the YouTube video to play
-            url = message.content[6:]
-            # Download the audio from the YouTube video
-
-       
-        channel.send("You are not in a voice channel!")
+# Run the bot
+client.run("MTA1OTA5MTkxMzUxMDIyMzkwMg.GoUReR.H3po8uodbgPZyKC-Lcd6e9xbKuKYmaujGVfvPk")
